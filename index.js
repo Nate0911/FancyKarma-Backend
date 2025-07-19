@@ -1,109 +1,100 @@
-// 🎀🎗 index.js — Final Reddit OAuth Backend with Google Sheet Logging and Redirect
+// 🎀🎗 index.js — Reddit OAuth Backend with Logging and Redirect
 import express from 'express';
 import cors from 'cors';
 import fetch from 'node-fetch';
 import { google } from 'googleapis';
-import { readFile } from 'fs/promises';
+import fs from 'fs';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const CLIENT_ID = '70G0I__N4hh4F48tKem05A'; // Installed app client ID
+const CLIENT_ID = '70G0I__N4hh4F48tKem05A'; // Installed app
 const CLIENT_SECRET = ''; // Blank for installed apps
-const REDIRECT_URL_ON_PASS = 'https://script.google.com/macros/s/AKfycbzT8-4MLHrLa0Hpo_II1O1KfdUuefN9R2KZXjrYZJ3ZAukA0UGwi7H9GJIc3-7KAYj27A/exec';
-
-const SHEET_ID = '1j4bf4NNhFzYZQV3XTEUdutMla2vkTL7MkAPrgHmqx4A';
-const SHEET_NAME = 'karmaLog';
+const USER_AGENT = 'FancyKarmaVerifier/1.0';
+const GOOGLE_SHEET_ID = '1j4bf4NNhFzYZQV3XTEUdutMla2vkTL7MkAPrgHmqx4A';
+const GOOGLE_SHEET_NAME = 'karmaLog';
+const PASS_REDIRECT = 'https://script.google.com/macros/s/AKfycbzT8-4MLHrLa0Hpo_II1O1KfdUuefN9R2KZXjrYZJ3ZAukA0UGwi7H9GJIc3-7KAYj27A/exec';
 
 app.use(cors());
 app.use(express.json());
 
-// Google Sheets Auth
-let sheetsClient;
-async function authorizeSheets() {
-  const credentials = JSON.parse(await readFile('./google-credentials.json', 'utf8'));
-  const auth = new google.auth.GoogleAuth({
-    credentials,
-    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-  });
-  const sheets = google.sheets({ version: 'v4', auth });
-  sheetsClient = sheets;
-}
+const auth = new google.auth.GoogleAuth({
+  credentials: JSON.parse(fs.readFileSync('google-credentials.json', 'utf8')),
+  scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+});
 
-// Log to Google Sheet
-async function logToSheet(values) {
-  if (!sheetsClient) await authorizeSheets();
-  await sheetsClient.spreadsheets.values.append({
-    spreadsheetId: SHEET_ID,
-    range: `${SHEET_NAME}!A:E`,
+const logToSheet = async (status, username, karma, age, error = '') => {
+  const client = await auth.getClient();
+  const sheets = google.sheets({ version: 'v4', auth: client });
+  const timestamp = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
+
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: GOOGLE_SHEET_ID,
+    range: `${GOOGLE_SHEET_NAME}!A:E`,
     valueInputOption: 'USER_ENTERED',
     requestBody: {
-      values: [values],
+      values: [[timestamp, status, username || 'unknown', karma || '', error]],
     },
   });
-}
+};
 
-// Main Auth Handler
 app.post('/auth', async (req, res) => {
   const { code, redirect_uri } = req.body;
   if (!code || !redirect_uri) {
+    await logToSheet('FAIL', 'unknown', '', '', 'Missing required fields');
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
   try {
-    // Exchange code for token
-    const tokenRes = await fetch('https://www.reddit.com/api/v1/access_token', {
+    const tokenResponse = await fetch('https://www.reddit.com/api/v1/access_token', {
       method: 'POST',
       headers: {
-        Authorization: 'Basic ' + Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64'),
-        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': 'Basic ' + Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64'),
+        'Content-Type': 'application/x-www-form-urlencoded'
       },
       body: new URLSearchParams({
         grant_type: 'authorization_code',
         code,
-        redirect_uri,
-      }),
+        redirect_uri
+      })
     });
-    const tokenData = await tokenRes.json();
+
+    const tokenData = await tokenResponse.json();
     if (!tokenData.access_token) {
-      await logToSheet([new Date().toLocaleString(), 'FAIL', 'unknown', '', 'Token exchange failed']);
+      await logToSheet('FAIL', 'unknown', '', '', tokenData.error || 'No access token');
       return res.status(401).json({ error: 'Invalid authorization code' });
     }
 
-    // Fetch Reddit user info
-    const meRes = await fetch('https://oauth.reddit.com/api/v1/me', {
+    const meResponse = await fetch('https://oauth.reddit.com/api/v1/me', {
       headers: {
-        Authorization: `Bearer ${tokenData.access_token}`,
-        'User-Agent': 'FancyKarmaVerifier/1.0',
-      },
+        'Authorization': `Bearer ${tokenData.access_token}`,
+        'User-Agent': USER_AGENT
+      }
     });
-    const me = await meRes.json();
-    const totalKarma = me.total_karma || (me.link_karma + me.comment_karma);
-    const accountAgeMonths = Math.floor((Date.now() / 1000 - me.created_utc) / (30 * 24 * 60 * 60));
-    const isSuspended = !!me.is_suspended;
-    const isBanned = isSuspended || !!me.subreddit?.banned;
 
-    // Logging details
-    const username = me.name || 'unknown';
-    const status = (isBanned || isSuspended)
-      ? 'FAIL'
-      : (totalKarma >= 200 && accountAgeMonths >= 8 ? 'PASS' : 'FAIL');
-    const reason = isBanned
-      ? 'Banned or Suspended'
-      : totalKarma >= 200 && accountAgeMonths >= 8
-      ? 'OK'
-      : 'Not enough karma or too young';
-    await logToSheet([new Date().toLocaleString(), status, username, totalKarma, reason]);
+    const meData = await meResponse.json();
+    const username = meData.name || 'unknown';
+    const totalKarma = meData.total_karma || (meData.link_karma + meData.comment_karma);
+    const accountAgeMonths = Math.floor((Date.now() / 1000 - meData.created_utc) / (30 * 24 * 60 * 60));
+    const isSuspended = !!meData.is_suspended;
+    const isBanned = !!meData.is_suspended || meData.subreddit?.banned;
 
-    // Redirect if pass, else send JSON response
-    if (status === 'PASS') {
-      return res.json({ redirect: REDIRECT_URL_ON_PASS });
-    } else {
-      return res.json({ status: 'fail', reason, karma: totalKarma, age: accountAgeMonths });
+    if (isSuspended || isBanned) {
+      await logToSheet('FAIL', username, totalKarma, accountAgeMonths, 'Suspended/Banned');
+      return res.json({ status: 'fail', reason: 'Account is suspended or banned' });
     }
-  } catch (err) {
-    console.error('❌ Server Error:', err);
-    await logToSheet([new Date().toLocaleString(), 'FAIL', 'unknown', '', 'Internal server error']);
+
+    if (totalKarma >= 200 && accountAgeMonths >= 8) {
+      await logToSheet('PASS', username, totalKarma, accountAgeMonths);
+      return res.json({ status: 'pass', redirect: PASS_REDIRECT });
+    } else {
+      await logToSheet('FAIL', username, totalKarma, accountAgeMonths, 'Low karma or young account');
+      return res.json({ status: 'fail', reason: "Oops, you don't have enough karma or account age is too young" });
+    }
+
+  } catch (error) {
+    console.error('❌ Backend error:', error);
+    await logToSheet('FAIL', 'unknown', '', '', error.message);
     return res.status(500).json({ error: 'Internal server error' });
   }
 });
