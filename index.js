@@ -7,7 +7,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 const CLIENT_ID = '0BAj33Q6SwYpuVNmwkasvQ';
-const CLIENT_SECRET = ''; // Blank for installed app
+const CLIENT_SECRET = 'nSeGU9iT4OpD8gMKAkxXptt_cvxRTw'; // Blank for installed app
 const USER_AGENT = 'FancyKarmaVerifier/1.0';
 
 app.use(cors());
