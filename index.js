@@ -56,11 +56,14 @@ app.post('/verify-reddit', async (req, res) => {
             console.log("LOG 5: Google Sheet loaded info.");
 
             const sheet = doc.sheetsByTitle['karmaLog'] || doc.sheetsByIndex[0];
+            
+            // Updated to match your actual headers: Date, Status, Username, Karma, Age
             await sheet.addRow({ 
+                Date: new Date().toLocaleDateString(),
+                Status: "SUCCESS",
                 Username: name, 
                 Karma: total_karma, 
-                Age: ageInDays, 
-                Timestamp: new Date().toLocaleString() 
+                Age: ageInDays
             });
             console.log("LOG 6: SUCCESS - Row added to sheet.");
         } else {
