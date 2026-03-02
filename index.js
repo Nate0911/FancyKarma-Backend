@@ -1,4 +1,4 @@
-// 🎀🎗 index.js — Reddit OAuth Backend with Logging and Redirect
+// 🎀🎗 index.js — Full Task Manager & Visibility Verifier
 import express from 'express';
 import cors from 'cors';
 import fetch from 'node-fetch';
@@ -6,15 +6,12 @@ import { google } from 'googleapis';
 import fs from 'fs';
 
 const app = express();
-const PORT = process.env.PORT || 10000; 
+const PORT = process.env.PORT || 10000;
 
-const CLIENT_ID = '70G0I__N4hh4F48tKem05A'; 
-const CLIENT_SECRET = ''; 
+const CLIENT_ID = '70G0I__N4hh4F48tKem05A';
+const CLIENT_SECRET = '';
 const USER_AGENT = 'FancyKarmaVerifier/1.0';
-const GOOGLE_SHEET_ID = '1j4bf4NNhFzYZQV3XTEUdutMla2vkTL7MkAPrgHmqx4A';
-const GOOGLE_SHEET_NAME = 'karmaLog';
-
-const PASS_REDIRECT_BASE = 'https://microworkers.contact9999.workers.dev/get-task';
+const GOOGLE_SHEET_ID = '1eGSSYlKX-lX7t3Ohhq_ySHBjwWcxh37sicx7ONw0Z6Q';
 
 app.use(cors());
 app.use(express.json());
@@ -24,114 +21,81 @@ const auth = new google.auth.GoogleAuth({
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
 
-const logToSheet = async (status, username, karma, ageDays, error = '') => {
-  try {
-    const client = await auth.getClient();
-    const sheets = google.sheets({ version: 'v4', auth: client });
-    const timestamp = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
+// --- HELPER: FIND AND LOCK TASK ---
+async function getAndLockTask(rowToLock = null) {
+  const client = await auth.getClient();
+  const sheets = google.sheets({ version: 'v4', auth: client });
+  
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId: GOOGLE_SHEET_ID,
+    range: 'Sheet1!A:D',
+  });
 
-    await sheets.spreadsheets.values.append({
+  const rows = response.data.values || [];
+
+  if (rowToLock) {
+    const now = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
+    await sheets.spreadsheets.values.update({
       spreadsheetId: GOOGLE_SHEET_ID,
-      range: `${GOOGLE_SHEET_NAME}!A:E`,
+      range: `Sheet1!C${rowToLock}`,
       valueInputOption: 'USER_ENTERED',
-      requestBody: {
-        values: [[timestamp, status, username || 'unknown', karma || '', `${ageDays} days`, error]],
-      },
+      requestBody: { values: [[now]] },
     });
-  } catch (err) {
-    console.error('Sheet Logging Error:', err);
+    return true;
   }
-};
+
+  // Find first row where Column C (Index 2) is empty
+  for (let i = 1; i < rows.length; i++) {
+    if (!rows[i][2]) { 
+      return { rowIndex: i + 1, comment: rows[i][1], postUrl: rows[i][3] };
+    }
+  }
+  return null;
+}
 
 app.post('/auth', async (req, res) => {
-  const { code, redirect_uri, state } = req.body;
-  if (!code || !redirect_uri) return res.status(400).json({ error: 'Missing required fields' });
-
+  const { code, redirect_uri } = req.body;
   try {
     const tokenResponse = await fetch('https://www.reddit.com/api/v1/access_token', {
       method: 'POST',
-      headers: {
-        'Authorization': 'Basic ' + Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64'),
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
+      headers: { 'Authorization': 'Basic ' + Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64'), 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri })
     });
-
     const tokenData = await tokenResponse.json();
-    if (!tokenData.access_token) return res.status(401).json({ error: 'Invalid auth code' });
-
+    
     const meResponse = await fetch('https://oauth.reddit.com/api/v1/me', {
       headers: { 'Authorization': `Bearer ${tokenData.access_token}`, 'User-Agent': USER_AGENT }
     });
-
     const meData = await meResponse.json();
-    const username = meData.name || 'unknown';
     
-    // Exact Karma Logic
-    const totalKarma = meData.total_karma || (meData.link_karma + meData.comment_karma);
-    
-    // Exact Age in DAYS Logic
-    const diffInSeconds = (Date.now() / 1000) - meData.created_utc;
-    const accountAgeDays = Math.floor(diffInSeconds / (24 * 60 * 60));
+    const karma = meData.total_karma || (meData.link_karma + meData.comment_karma);
+    const ageDays = Math.floor(((Date.now() / 1000) - meData.created_utc) / 86400);
 
-    // --- RULES: 1 Karma and 90 Days ---
-    if (totalKarma >= 1 && accountAgeDays >= 90) {
-      await logToSheet('PASS', username, totalKarma, accountAgeDays);
-      const platform = state || 'Worker'; 
-      const randomID = Math.floor(Math.random() * 9999);
-      const finalLink = `${PASS_REDIRECT_BASE}?workerId=${platform}_${username}_${randomID}`;
-      return res.json({ status: 'pass', redirect: finalLink });
+    if (karma >= 1 && ageDays >= 90) {
+      const task = await getAndLockTask();
+      if (!task) return res.json({ status: 'fail', reason: "No tasks available right now." });
+      return res.json({ status: 'pass', task });
     } else {
-      await logToSheet('FAIL', username, totalKarma, accountAgeDays, 'Low karma or age');
-      return res.json({ status: 'fail', reason: `Insufficient karma (${totalKarma}/1) or age (${accountAgeDays}/90 days)` });
+      return res.json({ status: 'fail', reason: `Requirement: 1 Karma/90 Days. You have: ${karma}/${ageDays}` });
     }
-
-  } catch (error) {
-    console.error('❌ Backend error:', error);
-    return res.status(500).json({ error: 'Internal server error' });
-  }
+  } catch (e) { return res.status(500).json({ error: "Server Error" }); }
 });
-// --- NEW STEP: CHECK IF COMMENT IS COLLAPSED ---
-app.post('/check-comment', async (req, res) => {
-  const { commentUrl } = req.body;
 
-  if (!commentUrl) {
-    return res.status(400).json({ error: 'Please provide a comment URL' });
-  }
-
+app.post('/verify-task', async (req, res) => {
+  const { commentUrl, rowIndex } = req.body;
   try {
-    // 1. Convert URL to JSON format for the Reddit API
-    const jsonUrl = commentUrl.endsWith('.json') ? commentUrl : `${commentUrl.split('?')[0]}.json`;
-
-    const response = await fetch(jsonUrl, {
-      headers: { 'User-Agent': USER_AGENT }
-    });
-
+    const jsonUrl = commentUrl.split('?')[0].replace(/\/$/, "") + ".json";
+    const response = await fetch(jsonUrl, { headers: { 'User-Agent': USER_AGENT } });
     const data = await response.json();
-
-    // 2. Dig into the Reddit JSON structure to find the comment object
-    // Structure: [post_data, comment_data]
     const commentData = data[1].data.children[0].data;
 
-    const isCollapsed = commentData.collapsed;
-    const reason = commentData.collapsed_reason || "None";
-
-    if (isCollapsed) {
-      return res.json({
-        status: 'fail',
-        message: `Your account comments are getting collapsed! Reason: ${reason}. Please use a higher quality account.`
-      });
-    } else {
-      return res.json({
-        status: 'pass',
-        message: 'Comment is visible! You can now submit your task.'
-      });
+    if (commentData.collapsed) {
+      return res.json({ status: 'fail', message: "Your comment is collapsed! You need to fix your Reddit account." });
     }
 
-  } catch (error) {
-    console.error('Comment Check Error:', error);
-    return res.status(500).json({ error: 'Could not verify comment. Make sure the link is correct.' });
-  }
+    await getAndLockTask(rowIndex);
+    return res.json({ status: 'pass', message: "Success! Please paste comment in Proof page." });
+  } catch (e) { return res.status(500).json({ error: "Invalid comment link provided." }); }
 });
-app.get('/', (req, res) => res.send('FancyKarma Backend is Live ✅'));
+
 app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
