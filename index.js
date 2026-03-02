@@ -91,6 +91,47 @@ app.post('/auth', async (req, res) => {
     return res.status(500).json({ error: 'Internal server error' });
   }
 });
+// --- NEW STEP: CHECK IF COMMENT IS COLLAPSED ---
+app.post('/check-comment', async (req, res) => {
+  const { commentUrl } = req.body;
 
+  if (!commentUrl) {
+    return res.status(400).json({ error: 'Please provide a comment URL' });
+  }
+
+  try {
+    // 1. Convert URL to JSON format for the Reddit API
+    const jsonUrl = commentUrl.endsWith('.json') ? commentUrl : `${commentUrl.split('?')[0]}.json`;
+
+    const response = await fetch(jsonUrl, {
+      headers: { 'User-Agent': USER_AGENT }
+    });
+
+    const data = await response.json();
+
+    // 2. Dig into the Reddit JSON structure to find the comment object
+    // Structure: [post_data, comment_data]
+    const commentData = data[1].data.children[0].data;
+
+    const isCollapsed = commentData.collapsed;
+    const reason = commentData.collapsed_reason || "None";
+
+    if (isCollapsed) {
+      return res.json({
+        status: 'fail',
+        message: `Your account comments are getting collapsed! Reason: ${reason}. Please use a higher quality account.`
+      });
+    } else {
+      return res.json({
+        status: 'pass',
+        message: 'Comment is visible! You can now submit your task.'
+      });
+    }
+
+  } catch (error) {
+    console.error('Comment Check Error:', error);
+    return res.status(500).json({ error: 'Could not verify comment. Make sure the link is correct.' });
+  }
+});
 app.get('/', (req, res) => res.send('FancyKarma Backend is Live ✅'));
 app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
