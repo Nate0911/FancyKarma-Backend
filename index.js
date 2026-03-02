@@ -13,7 +13,9 @@ const CLIENT_SECRET = ''; // Blank for installed apps
 const USER_AGENT = 'FancyKarmaVerifier/1.0';
 const GOOGLE_SHEET_ID = '1j4bf4NNhFzYZQV3XTEUdutMla2vkTL7MkAPrgHmqx4A';
 const GOOGLE_SHEET_NAME = 'karmaLog';
-const PASS_REDIRECT = 'https://script.google.com/macros/s/AKfycbzT8-4MLHrLa0Hpo_II1O1KfdUuefN9R2KZXjrYZJ3ZAukA0UGwi7H9GJIc3-7KAYj27A/exec';
+
+// Your friend's main link
+const PASS_REDIRECT_BASE = 'https://microworkers.contact9999.workers.dev/get-task';
 
 app.use(cors());
 app.use(express.json());
@@ -24,22 +26,28 @@ const auth = new google.auth.GoogleAuth({
 });
 
 const logToSheet = async (status, username, karma, age, error = '') => {
-  const client = await auth.getClient();
-  const sheets = google.sheets({ version: 'v4', auth: client });
-  const timestamp = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
+  try {
+    const client = await auth.getClient();
+    const sheets = google.sheets({ version: 'v4', auth: client });
+    const timestamp = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
 
-  await sheets.spreadsheets.values.append({
-    spreadsheetId: GOOGLE_SHEET_ID,
-    range: `${GOOGLE_SHEET_NAME}!A:E`,
-    valueInputOption: 'USER_ENTERED',
-    requestBody: {
-      values: [[timestamp, status, username || 'unknown', karma || '', error]],
-    },
-  });
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      range: `${GOOGLE_SHEET_NAME}!A:E`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: {
+        values: [[timestamp, status, username || 'unknown', karma || '', error]],
+      },
+    });
+  } catch (err) {
+    console.error('Sheet Logging Error:', err);
+  }
 };
 
 app.post('/auth', async (req, res) => {
-  const { code, redirect_uri } = req.body;
+  // We added 'state' here to catch the Platform (Sprout/Rapid)
+  const { code, redirect_uri, state } = req.body;
+  
   if (!code || !redirect_uri) {
     await logToSheet('FAIL', 'unknown', '', '', 'Missing required fields');
     return res.status(400).json({ error: 'Missing required fields' });
@@ -77,16 +85,27 @@ app.post('/auth', async (req, res) => {
     const totalKarma = meData.total_karma || (meData.link_karma + meData.comment_karma);
     const accountAgeMonths = Math.floor((Date.now() / 1000 - meData.created_utc) / (30 * 24 * 60 * 60));
     const isSuspended = !!meData.is_suspended;
-    const isBanned = !!meData.is_suspended || meData.subreddit?.banned;
+    const isBanned = !!meData.is_suspended || (meData.subreddit && meData.subreddit.banned);
 
     if (isSuspended || isBanned) {
       await logToSheet('FAIL', username, totalKarma, accountAgeMonths, 'Suspended/Banned');
       return res.json({ status: 'fail', reason: 'Account is suspended or banned' });
     }
 
+    // --- LOGIC FOR SUCCESSFUL WORKERS ---
     if (totalKarma >= 200 && accountAgeMonths >= 8) {
       await logToSheet('PASS', username, totalKarma, accountAgeMonths);
-      return res.json({ status: 'pass', redirect: PASS_REDIRECT });
+      
+      // We create a unique ID including the Platform and Reddit Username
+      const platform = state || 'Worker'; // Default to 'Worker' if platform is unknown
+      const randomID = Math.floor(Math.random() * 9999);
+      const finalWorkerLink = `${PASS_REDIRECT_BASE}?workerId=${platform}_${username}_${randomID}`;
+      
+      return res.json({ 
+        status: 'pass', 
+        redirect: finalWorkerLink 
+      });
+      
     } else {
       await logToSheet('FAIL', username, totalKarma, accountAgeMonths, 'Low karma or young account');
       return res.json({ status: 'fail', reason: "Oops, you don't have enough karma or account age is too young" });
