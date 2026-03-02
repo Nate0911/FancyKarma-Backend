@@ -6,20 +6,21 @@ import { google } from 'googleapis';
 import fs from 'fs';
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+// PORT 10000 is what Render is asking for in your logs
+const PORT = process.env.PORT || 10000; 
 
-const CLIENT_ID = '70G0I__N4hh4F48tKem05A'; // Installed app
-const CLIENT_SECRET = ''; // Blank for installed apps
+const CLIENT_ID = '70G0I__N4hh4F48tKem05A'; 
+const CLIENT_SECRET = ''; 
 const USER_AGENT = 'FancyKarmaVerifier/1.0';
 const GOOGLE_SHEET_ID = '1j4bf4NNhFzYZQV3XTEUdutMla2vkTL7MkAPrgHmqx4A';
 const GOOGLE_SHEET_NAME = 'karmaLog';
 
-// Your friend's main link
 const PASS_REDIRECT_BASE = 'https://microworkers.contact9999.workers.dev/get-task';
 
 app.use(cors());
 app.use(express.json());
 
+// This is working according to your logs!
 const auth = new google.auth.GoogleAuth({
   credentials: JSON.parse(fs.readFileSync('google-credentials.json', 'utf8')),
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
@@ -45,11 +46,9 @@ const logToSheet = async (status, username, karma, age, error = '') => {
 };
 
 app.post('/auth', async (req, res) => {
-  // We added 'state' here to catch the Platform (Sprout/Rapid)
   const { code, redirect_uri, state } = req.body;
   
   if (!code || !redirect_uri) {
-    await logToSheet('FAIL', 'unknown', '', '', 'Missing required fields');
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
@@ -69,7 +68,6 @@ app.post('/auth', async (req, res) => {
 
     const tokenData = await tokenResponse.json();
     if (!tokenData.access_token) {
-      await logToSheet('FAIL', 'unknown', '', '', tokenData.error || 'No access token');
       return res.status(401).json({ error: 'Invalid authorization code' });
     }
 
@@ -84,36 +82,22 @@ app.post('/auth', async (req, res) => {
     const username = meData.name || 'unknown';
     const totalKarma = meData.total_karma || (meData.link_karma + meData.comment_karma);
     const accountAgeMonths = Math.floor((Date.now() / 1000 - meData.created_utc) / (30 * 24 * 60 * 60));
-    const isSuspended = !!meData.is_suspended;
-    const isBanned = !!meData.is_suspended || (meData.subreddit && meData.subreddit.banned);
 
-    if (isSuspended || isBanned) {
-      await logToSheet('FAIL', username, totalKarma, accountAgeMonths, 'Suspended/Banned');
-      return res.json({ status: 'fail', reason: 'Account is suspended or banned' });
-    }
-
-    // --- LOGIC FOR SUCCESSFUL WORKERS ---
-    if (totalKarma >= 200 && accountAgeMonths >= 8) {
+    // YOUR RULES
+    if (totalKarma >= 2 && accountAgeMonths >= 1) {
       await logToSheet('PASS', username, totalKarma, accountAgeMonths);
-      
-      // We create a unique ID including the Platform and Reddit Username
-      const platform = state || 'Worker'; // Default to 'Worker' if platform is unknown
+      const platform = state || 'Worker'; 
       const randomID = Math.floor(Math.random() * 9999);
       const finalWorkerLink = `${PASS_REDIRECT_BASE}?workerId=${platform}_${username}_${randomID}`;
       
-      return res.json({ 
-        status: 'pass', 
-        redirect: finalWorkerLink 
-      });
-      
+      return res.json({ status: 'pass', redirect: finalWorkerLink });
     } else {
-      await logToSheet('FAIL', username, totalKarma, accountAgeMonths, 'Low karma or young account');
-      return res.json({ status: 'fail', reason: "Oops, you don't have enough karma or account age is too young" });
+      await logToSheet('FAIL', username, totalKarma, accountAgeMonths, 'Low karma or age');
+      return res.json({ status: 'fail', reason: "Insufficient karma or account age" });
     }
 
   } catch (error) {
     console.error('❌ Backend error:', error);
-    await logToSheet('FAIL', 'unknown', '', '', error.message);
     return res.status(500).json({ error: 'Internal server error' });
   }
 });
