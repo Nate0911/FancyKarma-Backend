@@ -40,7 +40,7 @@ app.post('/verify-reddit', async (req, res) => {
         console.log(`LOG 2: User ${name} fetched. Karma: ${total_karma}, Age: ${ageInDays}`);
 
         // --- GOOGLE SHEETS SECTION ---
-        const credsPath = path.join(__dirname, 'credentials.json');
+        const credsPath = '/etc/secrets/credentials.json';
         console.log(`LOG 3: Checking for file at ${credsPath}`);
 
         if (fs.existsSync(credsPath)) {
