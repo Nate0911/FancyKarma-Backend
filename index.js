@@ -15,6 +15,9 @@ const GOOGLE_SHEET_ID = '1eGSSYlKX-lX7t3Ohhq_ySHBjwWcxh37sicx7ONw0Z6Q';
 app.use(cors());
 app.use(express.json());
 
+// This stops the "Cannot GET /" error
+app.get('/', (req, res) => res.send("Backend is Active and Running! 🚀"));
+
 const auth = new google.auth.GoogleAuth({
   credentials: JSON.parse(fs.readFileSync('google-credentials.json', 'utf8')),
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
@@ -48,10 +51,17 @@ app.post('/auth', async (req, res) => {
   try {
     const tokenResponse = await fetch('https://www.reddit.com/api/v1/access_token', {
       method: 'POST',
-      headers: { 'Authorization': 'Basic ' + Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64'), 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri })
+      headers: { 
+        'Authorization': 'Basic ' + Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64'), 
+        'Content-Type': 'application/x-www-form-urlencoded' 
+      },
+      body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri }),
+      timeout: 15000 // Increased timeout
     });
     const tokenData = await tokenResponse.json();
+    
+    if (tokenData.error) return res.json({ status: 'fail', reason: "Reddit Auth Error: " + tokenData.error });
+
     const meRes = await fetch('https://oauth.reddit.com/api/v1/me', {
       headers: { 'Authorization': `Bearer ${tokenData.access_token}`, 'User-Agent': USER_AGENT }
     });
@@ -60,15 +70,16 @@ app.post('/auth', async (req, res) => {
     const karma = (meData.total_karma || 0);
     const ageDays = Math.floor(((Date.now() / 1000) - meData.created_utc) / 86400);
 
-    // FORGIVING CHECK: If age >= 90 OR karma >= 1, they pass.
+    // FORGIVING CHECK: Pass if age >= 90 OR karma >= 1
     if (ageDays >= 90 || karma >= 1) {
       const task = await getAndLockTask();
-      if (!task) return res.json({ status: 'fail', reason: "All tasks completed." });
+      if (!task) return res.json({ status: 'fail', reason: "No tasks available." });
       return res.json({ status: 'pass', task });
     }
-    return res.json({ status: 'fail', reason: `Needs 1 Karma or 90 Days. (You: ${karma}K / ${ageDays}D)` });
+    return res.json({ status: 'fail', reason: `Requirement: 1 Karma or 90 Days. (Detected: ${karma}K / ${ageDays}D)` });
   } catch (e) { 
-    return res.json({ status: 'fail', reason: "Reddit API Timeout. Please refresh." }); 
+    console.error(e);
+    return res.json({ status: 'fail', reason: "Server waking up. Please refresh in 10 seconds." }); 
   }
 });
 
@@ -84,4 +95,4 @@ app.post('/verify-task', async (req, res) => {
   } catch (e) { return res.json({ status: 'fail', message: "Invalid URL." }); }
 });
 
-app.listen(PORT, () => console.log(`Server Live`));
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
