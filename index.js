@@ -46,7 +46,7 @@ app.post('/verify-reddit', async (req, res) => {
         if (fs.existsSync(credsPath)) {
             console.log("LOG 4: File found. Connecting to Google...");
             const creds = JSON.parse(fs.readFileSync(credsPath));
-            const doc = new GoogleSpreadsheet('1eGSSYlKX-lX7t3Ohhq_ySHBjwWcxh37sicx7ONw0Z6Q', new JWT({
+            const doc = new GoogleSpreadsheet('1j4bf4NNhFzYZQV3XTEUdutMla2vkTL7MkAPrgHmqx4A', new JWT({
                 email: creds.client_email,
                 key: creds.private_key,
                 scopes: ['https://www.googleapis.com/auth/spreadsheets'],
