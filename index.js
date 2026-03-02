@@ -1,33 +1,95 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8"><title>Verifying...</title>
-  <style>
-    body { background: #0b0b0b; color: white; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: sans-serif; }
-    .loader { border: 4px solid #333; border-top: 4px solid #FF4500; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: auto; }
-    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-  </style>
-</head>
-<body>
-  <div id="box"><div class="loader"></div><p>Checking Eligibility...</p></div>
-  <script>
-    async function start() {
-      const code = new URLSearchParams(window.location.search).get('code');
-      try {
-        const res = await fetch('https://fancykarma-backend.onrender.com/auth', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ code: code, redirect_uri: "https://nate0911.github.io/Fancykarma/redirect.html" })
-        });
-        const data = await res.json();
-        if(data.status === 'pass') {
-          window.location.href = `index.html?status=pass&r=${data.task.rowIndex}&c=${encodeURIComponent(data.task.comment)}&u=${encodeURIComponent(data.task.postUrl)}`;
-        } else {
-          document.getElementById('box').innerHTML = `<h3 style="color:#FF4500">❌ Requirement Fail</h3><p>${data.reason}</p>`;
-        }
-      } catch(e) { document.getElementById('box').innerText = "❌ Server Error"; }
+import express from 'express';
+import cors from 'cors';
+import fetch from 'node-fetch';
+import { google } from 'googleapis';
+import fs from 'fs';
+
+const app = express();
+const PORT = process.env.PORT || 10000;
+
+// CONFIGURATION
+const CLIENT_ID = '70G0I__N4hh4F48tKem05A';
+const CLIENT_SECRET = 'YOUR_REDDIT_SECRET'; 
+const USER_AGENT = 'FancyKarmaVerifier/1.0';
+const GOOGLE_SHEET_ID = '1eGSSYlKX-lX7t3Ohhq_ySHBjwWcxh37sicx7ONw0Z6Q';
+
+app.use(cors());
+app.use(express.json());
+
+const auth = new google.auth.GoogleAuth({
+  credentials: JSON.parse(fs.readFileSync('google-credentials.json', 'utf8')),
+  scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+});
+
+async function getAndLockTask(rowToLock = null) {
+  const client = await auth.getClient();
+  const sheets = google.sheets({ version: 'v4', auth: client });
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId: GOOGLE_SHEET_ID,
+    range: 'Sheet1!A:D',
+  });
+  const rows = response.data.values || [];
+
+  if (rowToLock) {
+    const now = new Date().toLocaleString();
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      range: `Sheet1!C${rowToLock}`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values: [[now]] },
+    });
+    return true;
+  }
+
+  for (let i = 1; i < rows.length; i++) {
+    if (!rows[i][2]) { 
+      return { rowIndex: i + 1, comment: rows[i][1], postUrl: rows[i][3] };
     }
-    start();
-  </script>
-</body>
-</html>
+  }
+  return null;
+}
+
+app.post('/auth', async (req, res) => {
+  const { code, redirect_uri } = req.body;
+  try {
+    const tokenResponse = await fetch('https://www.reddit.com/api/v1/access_token', {
+      method: 'POST',
+      headers: { 'Authorization': 'Basic ' + Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64'), 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri })
+    });
+    const tokenData = await tokenResponse.json();
+    const meResponse = await fetch('https://oauth.reddit.com/api/v1/me', {
+      headers: { 'Authorization': `Bearer ${tokenData.access_token}`, 'User-Agent': USER_AGENT }
+    });
+    const meData = await meResponse.json();
+
+    const totalKarma = (meData.total_karma || 0) + (meData.link_karma || 0) + (meData.comment_karma || 0);
+    const ageDays = Math.floor(((Date.now() / 1000) - meData.created_utc) / 86400);
+
+    // FORGIVING LOGIC: If account is 90 days old, ignore karma requirement.
+    if (ageDays >= 90 || totalKarma >= 1) {
+      const task = await getAndLockTask();
+      if (!task) return res.json({ status: 'fail', reason: "No tasks available." });
+      return res.json({ status: 'pass', task });
+    }
+    return res.json({ status: 'fail', reason: `Account too new (${ageDays} days) and no karma.` });
+  } catch (e) { 
+    return res.status(500).json({ status: 'fail', reason: "Reddit Auth Failed." }); 
+  }
+});
+
+app.post('/verify-task', async (req, res) => {
+  const { commentUrl, rowIndex } = req.body;
+  try {
+    const jsonUrl = commentUrl.split('?')[0].replace(/\/$/, "") + ".json";
+    const response = await fetch(jsonUrl, { headers: { 'User-Agent': USER_AGENT } });
+    const data = await response.json();
+    const commentData = data[1].data.children[0].data;
+
+    if (commentData.collapsed) return res.json({ status: 'fail', message: "Comment hidden by Reddit." });
+    await getAndLockTask(rowIndex);
+    return res.json({ status: 'pass', message: "Success! Verified." });
+  } catch (e) { return res.json({ status: 'fail', message: "Invalid Link." }); }
+});
+
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
