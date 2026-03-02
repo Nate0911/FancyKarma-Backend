@@ -1,4 +1,3 @@
-// 🎀🎗 index.js — Full Task Manager & Visibility Verifier
 import express from 'express';
 import cors from 'cors';
 import fetch from 'node-fetch';
@@ -21,20 +20,17 @@ const auth = new google.auth.GoogleAuth({
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
 
-// --- HELPER: FIND AND LOCK TASK ---
 async function getAndLockTask(rowToLock = null) {
   const client = await auth.getClient();
   const sheets = google.sheets({ version: 'v4', auth: client });
-  
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId: GOOGLE_SHEET_ID,
     range: 'Sheet1!A:D',
   });
-
   const rows = response.data.values || [];
 
   if (rowToLock) {
-    const now = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
+    const now = new Date().toLocaleString();
     await sheets.spreadsheets.values.update({
       spreadsheetId: GOOGLE_SHEET_ID,
       range: `Sheet1!C${rowToLock}`,
@@ -44,7 +40,6 @@ async function getAndLockTask(rowToLock = null) {
     return true;
   }
 
-  // Find first row where Column C (Index 2) is empty
   for (let i = 1; i < rows.length; i++) {
     if (!rows[i][2]) { 
       return { rowIndex: i + 1, comment: rows[i][1], postUrl: rows[i][3] };
@@ -62,22 +57,19 @@ app.post('/auth', async (req, res) => {
       body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri })
     });
     const tokenData = await tokenResponse.json();
-    
     const meResponse = await fetch('https://oauth.reddit.com/api/v1/me', {
-      headers: { 'Authorization': `Bearer ${tokenData.access_token}`, 'User-Agent': USER_AGENT }
+      headers: { 'Authorization': `Bearer ${tokenData.access_token}`, 'User-User-Agent': USER_AGENT }
     });
     const meData = await meResponse.json();
-    
-    const karma = meData.total_karma || (meData.link_karma + meData.comment_karma);
+    const karma = meData.total_karma || 0;
     const ageDays = Math.floor(((Date.now() / 1000) - meData.created_utc) / 86400);
 
     if (karma >= 1 && ageDays >= 90) {
       const task = await getAndLockTask();
-      if (!task) return res.json({ status: 'fail', reason: "No tasks available right now." });
+      if (!task) return res.json({ status: 'fail', reason: "No tasks available." });
       return res.json({ status: 'pass', task });
-    } else {
-      return res.json({ status: 'fail', reason: `Requirement: 1 Karma/90 Days. You have: ${karma}/${ageDays}` });
     }
+    return res.json({ status: 'fail', reason: `Low stats: ${karma} Karma / ${ageDays} Days.` });
   } catch (e) { return res.status(500).json({ error: "Server Error" }); }
 });
 
@@ -90,12 +82,11 @@ app.post('/verify-task', async (req, res) => {
     const commentData = data[1].data.children[0].data;
 
     if (commentData.collapsed) {
-      return res.json({ status: 'fail', message: "Your comment is collapsed! You need to fix your Reddit account." });
+      return res.json({ status: 'fail', message: "Your comment is collapsed! Reddit is hiding your account." });
     }
-
     await getAndLockTask(rowIndex);
-    return res.json({ status: 'pass', message: "Success! Please paste comment in Proof page." });
-  } catch (e) { return res.status(500).json({ error: "Invalid comment link provided." }); }
+    return res.json({ status: 'pass', message: "Success! Your comment is visible. Please paste it in the Proof page." });
+  } catch (e) { return res.json({ status: 'fail', message: "Invalid Link. Ensure you copied the 'Share Link' of your comment." }); }
 });
 
-app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Backend Live on ${PORT}`));
