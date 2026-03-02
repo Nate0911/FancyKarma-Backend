@@ -6,7 +6,7 @@ import { google } from 'googleapis';
 import fs from 'fs';
 
 const app = express();
-// PORT 10000 is what Render is asking for in your logs
+// PORT 10000 matches your Render logs
 const PORT = process.env.PORT || 10000; 
 
 const CLIENT_ID = '70G0I__N4hh4F48tKem05A'; 
@@ -15,12 +15,13 @@ const USER_AGENT = 'FancyKarmaVerifier/1.0';
 const GOOGLE_SHEET_ID = '1j4bf4NNhFzYZQV3XTEUdutMla2vkTL7MkAPrgHmqx4A';
 const GOOGLE_SHEET_NAME = 'karmaLog';
 
+// Redirect link for successful workers
 const PASS_REDIRECT_BASE = 'https://microworkers.contact9999.workers.dev/get-task';
 
 app.use(cors());
 app.use(express.json());
 
-// This is working according to your logs!
+// Google Sheets Auth - Ensure google-credentials.json is in your repo!
 const auth = new google.auth.GoogleAuth({
   credentials: JSON.parse(fs.readFileSync('google-credentials.json', 'utf8')),
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
@@ -83,17 +84,25 @@ app.post('/auth', async (req, res) => {
     const totalKarma = meData.total_karma || (meData.link_karma + meData.comment_karma);
     const accountAgeMonths = Math.floor((Date.now() / 1000 - meData.created_utc) / (30 * 24 * 60 * 60));
 
-    // YOUR RULES
-    if (totalKarma >= 2 && accountAgeMonths >= 1) {
+    // --- UPDATED RULES: 1 KARMA AND 3 MONTHS ---
+    if (totalKarma >= 1 && accountAgeMonths >= 3) {
       await logToSheet('PASS', username, totalKarma, accountAgeMonths);
+      
       const platform = state || 'Worker'; 
       const randomID = Math.floor(Math.random() * 9999);
       const finalWorkerLink = `${PASS_REDIRECT_BASE}?workerId=${platform}_${username}_${randomID}`;
       
-      return res.json({ status: 'pass', redirect: finalWorkerLink });
+      return res.json({ 
+        status: 'pass', 
+        redirect: finalWorkerLink 
+      });
+      
     } else {
-      await logToSheet('FAIL', username, totalKarma, accountAgeMonths, 'Low karma or age');
-      return res.json({ status: 'fail', reason: "Insufficient karma or account age" });
+      await logToSheet('FAIL', username, totalKarma, accountAgeMonths, 'Insufficient Karma or Age');
+      return res.json({ 
+        status: 'fail', 
+        reason: "Oops, you don't have enough karma or account age is too young" 
+      });
     }
 
   } catch (error) {
