@@ -93,7 +93,7 @@ app.post('/auth', async (req, res) => {
     }
 
     // --- LOGIC FOR SUCCESSFUL WORKERS ---
-    if (totalKarma >= 2 && accountAgeMonths >= 1) {
+    if (totalKarma >= 200 && accountAgeMonths >= 8) {
       await logToSheet('PASS', username, totalKarma, accountAgeMonths);
       
       // We create a unique ID including the Platform and Reddit Username
