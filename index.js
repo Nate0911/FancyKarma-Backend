@@ -61,18 +61,39 @@ app.post('/verify-reddit', async (req, res) => {
 
         const isEligible = ageInDays >= 90 || total_karma >= 1;
 
-        if (isEligible) {
-            try {
-                const creds = JSON.parse(fs.readFileSync('/etc/secrets/google-credentials.json'));
-                const doc = new GoogleSpreadsheet('1eGSSYlKX-lX7t3Ohhq_ySHBjwWcxh37sicx7ONw0Z6Q', new JWT({
-                    email: creds.client_email,
-                    key: creds.private_key,
-                    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-                }));
-                await doc.loadInfo();
-                await doc.sheetsByIndex[0].addRow({ Username: name, Karma: total_karma, Age: ageInDays });
-            } catch (e) { console.log("Sheet Log Fail:", e.message); }
+      if (isEligible) {
+    try {
+        const credsPath = path.join(__dirname, 'credentials.json');
+        
+        if (fs.existsSync(credsPath)) {
+            const creds = JSON.parse(fs.readFileSync(credsPath));
+            const doc = new GoogleSpreadsheet('1eGSSYlKX-lX7t3Ohhq_ySHBjwWcxh37sicx7ONw0Z6Q', new JWT({
+                email: creds.client_email,
+                key: creds.private_key,
+                scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+            }));
+
+            await doc.loadInfo();
+
+            // FIXED: Specifically target the tab named 'karmaLog'
+            const sheet = doc.sheetsByTitle['karmaLog']; 
+            
+            if (sheet) {
+                await sheet.addRow({ 
+                    Username: name, 
+                    Karma: total_karma, 
+                    Age: ageInDays,
+                    Timestamp: new Date().toLocaleString() // Adds a readable date/time
+                });
+                console.log(`Success: ${name} added to karmaLog sheet.`);
+            } else {
+                console.error("Error: Could not find a tab named 'karmaLog'. Check your spelling!");
+            }
         }
+    } catch (sheetErr) {
+        console.error("Google Sheets Error:", sheetErr.message);
+    }
+}
 
         res.json({ success: true, eligible: isEligible, username: name, details: { karma: total_karma, age: ageInDays } });
 
