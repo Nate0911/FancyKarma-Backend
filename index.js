@@ -7,8 +7,9 @@ import fs from 'fs';
 const app = express();
 const PORT = process.env.PORT || 10000;
 
+// Update these with your actual credentials
 const CLIENT_ID = '70G0I__N4hh4F48tKem05A';
-const CLIENT_SECRET = '';
+const CLIENT_SECRET = 'YOUR_REDDIT_SECRET_HERE'; 
 const USER_AGENT = 'FancyKarmaVerifier/1.0';
 const GOOGLE_SHEET_ID = '1eGSSYlKX-lX7t3Ohhq_ySHBjwWcxh37sicx7ONw0Z6Q';
 
@@ -41,7 +42,7 @@ async function getAndLockTask(rowToLock = null) {
   }
 
   for (let i = 1; i < rows.length; i++) {
-    if (!rows[i][2]) { 
+    if (!rows[i][2]) { // Column C is empty
       return { rowIndex: i + 1, comment: rows[i][1], postUrl: rows[i][3] };
     }
   }
@@ -53,14 +54,19 @@ app.post('/auth', async (req, res) => {
   try {
     const tokenResponse = await fetch('https://www.reddit.com/api/v1/access_token', {
       method: 'POST',
-      headers: { 'Authorization': 'Basic ' + Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64'), 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: { 
+        'Authorization': 'Basic ' + Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64'), 
+        'Content-Type': 'application/x-www-form-urlencoded' 
+      },
       body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri })
     });
     const tokenData = await tokenResponse.json();
+
     const meResponse = await fetch('https://oauth.reddit.com/api/v1/me', {
-      headers: { 'Authorization': `Bearer ${tokenData.access_token}`, 'User-User-Agent': USER_AGENT }
+      headers: { 'Authorization': `Bearer ${tokenData.access_token}`, 'User-Agent': USER_AGENT }
     });
     const meData = await meResponse.json();
+    
     const karma = meData.total_karma || 0;
     const ageDays = Math.floor(((Date.now() / 1000) - meData.created_utc) / 86400);
 
@@ -69,8 +75,10 @@ app.post('/auth', async (req, res) => {
       if (!task) return res.json({ status: 'fail', reason: "No tasks available." });
       return res.json({ status: 'pass', task });
     }
-    return res.json({ status: 'fail', reason: `Low stats: ${karma} Karma / ${ageDays} Days.` });
-  } catch (e) { return res.status(500).json({ error: "Server Error" }); }
+    return res.json({ status: 'fail', reason: `Requirement: 1 Karma/90 Days. You have: ${karma}/${ageDays}` });
+  } catch (e) { 
+    return res.status(500).json({ status: 'fail', reason: "Server connection error." }); 
+  }
 });
 
 app.post('/verify-task', async (req, res) => {
@@ -82,11 +90,13 @@ app.post('/verify-task', async (req, res) => {
     const commentData = data[1].data.children[0].data;
 
     if (commentData.collapsed) {
-      return res.json({ status: 'fail', message: "Your comment is collapsed! Reddit is hiding your account." });
+      return res.json({ status: 'fail', message: "Comment is hidden/collapsed by Reddit." });
     }
     await getAndLockTask(rowIndex);
-    return res.json({ status: 'pass', message: "Success! Your comment is visible. Please paste it in the Proof page." });
-  } catch (e) { return res.json({ status: 'fail', message: "Invalid Link. Ensure you copied the 'Share Link' of your comment." }); }
+    return res.json({ status: 'pass', message: "Success! Your comment is visible." });
+  } catch (e) { 
+    return res.json({ status: 'fail', message: "Invalid Link. Please provide the direct comment URL." }); 
+  }
 });
 
-app.listen(PORT, () => console.log(`Backend Live on ${PORT}`));
+app.listen(PORT, () => console.log(`Backend running on ${PORT}`));
