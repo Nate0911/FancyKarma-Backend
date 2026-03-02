@@ -16,8 +16,8 @@ const GOOGLE_SHEET_ID = '1eGSSYlKX-lX7t3Ohhq_ySHBjwWcxh37sicx7ONw0Z6Q';
 app.use(cors());
 app.use(express.json());
 
-// Routes to fix "Cannot GET /"
-app.get('/', (req, res) => res.send("Server Online"));
+// Fixed: Status routes so "Server Status" light works
+app.get('/', (req, res) => res.send("FancyKarma Backend Online"));
 app.get('/ping', (req, res) => res.json({ status: "online" }));
 
 const auth = new google.auth.GoogleAuth({
@@ -53,12 +53,16 @@ app.post('/auth', async (req, res) => {
     const authHeader = 'Basic ' + Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64');
     const tokenResponse = await fetch('https://www.reddit.com/api/v1/access_token', {
       method: 'POST',
-      headers: { 'Authorization': authHeader, 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': USER_AGENT },
+      headers: { 
+        'Authorization': authHeader, 
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': USER_AGENT 
+      },
       body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri }),
     });
 
     const tokenData = await tokenResponse.json();
-    if (tokenData.error) return res.json({ status: 'fail', reason: `Reddit 401: ${tokenData.error}` });
+    if (tokenData.error) return res.json({ status: 'fail', reason: `401 Error: ${tokenData.error}` });
 
     const meRes = await fetch('https://oauth.reddit.com/api/v1/me', {
       headers: { 'Authorization': `Bearer ${tokenData.access_token}`, 'User-Agent': USER_AGENT }
@@ -69,10 +73,23 @@ app.post('/auth', async (req, res) => {
 
     if (ageDays >= 90 || karma >= 1) {
       const task = await getAndLockTask();
+      if (!task) return res.json({ status: 'fail', reason: "Out of tasks." });
       return res.json({ status: 'pass', task });
     }
-    return res.json({ status: 'fail', reason: "Stats too low." });
-  } catch (e) { return res.json({ status: 'fail', reason: "Timeout." }); }
+    return res.json({ status: 'fail', reason: `Low stats: ${karma}K / ${ageDays}D` });
+  } catch (e) { return res.json({ status: 'fail', reason: "Connection Timeout." }); }
 });
 
-app.listen(PORT, () => console.log(`Live`));
+app.post('/verify-task', async (req, res) => {
+  const { commentUrl, rowIndex } = req.body;
+  try {
+    const jsonUrl = commentUrl.split('?')[0].replace(/\/$/, "") + ".json";
+    const response = await fetch(jsonUrl, { headers: { 'User-Agent': USER_AGENT } });
+    const data = await response.json();
+    if (data[1].data.children[0].data.collapsed) return res.json({ status: 'fail', message: "Comment hidden." });
+    await getAndLockTask(rowIndex);
+    return res.json({ status: 'pass', message: "Verified!" });
+  } catch (e) { return res.json({ status: 'fail', message: "Invalid URL." }); }
+});
+
+app.listen(PORT, () => console.log(`Live on ${PORT}`));
